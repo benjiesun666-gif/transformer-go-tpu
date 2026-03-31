@@ -1,0 +1,10 @@
+jax>=0.4.13
+jaxlib>=0.4.13
+flax>=0.7.0
+optax>=0.1.5
+mctx>=0.0.3
+pgx>=0.6.0
+orbax-checkpoint>=0.3.0
+numpy>=1.24.0
+torch>=2.0.0
+tensorboard>=2.13.0
