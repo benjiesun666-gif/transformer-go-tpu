@@ -41,7 +41,7 @@ The model `GoTransformerTPU` takes a Pgx observation tensor of shape `(batch, 19
 2. **Reshape and positional encoding**: The tensor is reshaped to `(batch, 361, d_model)` and a learnable 2D positional embedding is added.
 3. **Transformer encoder**: `num_layers` blocks of `TransformerBlock` (Pre‑LayerNorm, multi‑head self‑attention, feed‑forward network).
 4. **Pooling and heads**: Global average pooling over the sequence dimension yields a `(batch, d_model)` vector. Three separate heads produce:
-   - Policy logits: `(batch, 361)`
+   - Policy logits: `(batch, 362)` – 361 board positions + **1 pass**.
    - Value logits: `(batch, 128)` (for 128 buckets)
    - Uncertainty: `(batch, 1)` squashed by sigmoid to `[0,1]`
 
@@ -77,21 +77,21 @@ The function `run_selfplay()` generates a batch of self‑play games:
 1. Initialize model parameters randomly, create a Pgx environment, and instantiate `PgxMctxMCTS`.
 2. Use `jax.vmap` to initialize `BATCH_SIZE` games in parallel.
 3. At each time step, apply a JIT‑compiled `play_step` function to all active games:
-   - Call MCTS to obtain action weights (the visit distribution).
+   - Call MCTS to obtain action weights (the visit distribution, dimension `362`).
    - Sample an action using `jax.random.categorical`.
    - Advance the environment with `env.step`.
 4. Record for every step: observation, action weights, current player, and active mask.
 5. After the games finish, back‑propagate the true game outcomes (`state.rewards`) to each move, flipping sign according to the player at that move (so that the value is always from the perspective of the player who made the move).
 6. Map the true outcomes from `[-1,0,1]` to bucket indices `0..127`:  
    `value_bucket = ((value + 1) / 2 * 127).astype(np.int32)`.
-7. Save the data as a compressed `.npz` file with timestamped filename (containing `obs`, `policy`, `value`, `mask`).
+7. Save the data as a compressed `.npz` file with timestamped filename (containing `obs`, `policy` (shape `(T*B, 362)`), `value`, `mask`).
 
 ### 3.4 Training Loop (`tpu_train.py`)
 
-- `TPUSelfPlayDataset` loads `.npz` files into memory (concatenating and filtering by mask).  
+- `TPUSelfPlayDataset` loads `.npz` files into memory (concatenating and filtering by mask). It expects policy arrays of shape `(T*B, 362)`.
 - A PyTorch `DataLoader` with multiprocessing (fallback to 0 workers on Windows) feeds batches to the training step.
 - The training step `train_step` is JIT‑compiled with `jax.jit` and computes:
-  - Policy cross‑entropy loss (using the MCTS policy as the target).
+  - Policy cross‑entropy loss (using the MCTS policy as the target, dimension `362`).
   - Value cross‑entropy loss (target is the integer bucket index).
   - Optionally, Bayesian uncertainty loss (MSE between `uncertainty` and the normalized prediction error) when `use_bayesian=True`.
 - Optimizer: `optax.adamw` with a fixed learning rate (configurable, can be extended with a scheduler).
@@ -100,7 +100,7 @@ The function `run_selfplay()` generates a batch of self‑play games:
 
 ### 3.5 Data Loading (`data_utils.py`)
 
-- `TPUSelfPlayDataset` scans all `.npz` files, flattens the time and batch dimensions, and filters out invalid moves using the `mask` array. The data is concatenated into large arrays for efficient access.
+- `TPUSelfPlayDataset` scans all `.npz` files, flattens the time and batch dimensions, and filters out invalid moves using the `mask` array. The data is concatenated into large arrays for efficient access. Policy arrays are reshaped to `(total_samples, 362)`.
 - `create_dataloader` returns a PyTorch `DataLoader` with configurable number of workers, pin memory, and `drop_last` to ensure consistent batch sizes.
 
 ---
@@ -191,3 +191,15 @@ This project embodies several core design principles:
 4. **Research‑ready engineering**: Modular code, clear configuration, and detailed documentation provide a solid baseline for future experiments (e.g., hyperparameter tuning, architecture exploration).
 
 The prototype has been validated on Colab TPU (32 concurrent games, loss convergence from 5.8 to 2.0). Next steps include performing ablation studies comparing Bayesian MCTS with standard MCTS and scaling up self‑play on larger TPU clusters.
+
+---
+
+## 10. Important Note on Policy Dimension
+
+All policy‑related tensors in this implementation have dimension **362** (361 board intersections + 1 pass). This is consistently reflected in:
+- `config.num_policy_outputs = 362`
+- Model output shape `(batch, 362)`
+- Self‑play saved policy arrays shape `(T*B, 362)`
+- Data loader reshape using `362`
+
+This ensures that the pass move is properly included in both search and training.
