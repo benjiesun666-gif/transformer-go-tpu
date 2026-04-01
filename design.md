@@ -190,8 +190,6 @@ This project embodies several core design principles:
 3. **Architectural shift**: Replacing CNN with Transformer, learning from rich input (Pgx 17‑plane observations) and capable of reducing to simpler representations in the future.
 4. **Research‑ready engineering**: Modular code, clear configuration, and detailed documentation provide a solid baseline for future experiments (e.g., hyperparameter tuning, architecture exploration).
 
-The prototype has been validated on Colab TPU (32 concurrent games, loss convergence from 5.8 to 2.0). Next steps include performing ablation studies comparing Bayesian MCTS with standard MCTS and scaling up self‑play on larger TPU clusters.
-
 ---
 
 ## 10. Important Note on Policy Dimension
