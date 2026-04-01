@@ -199,14 +199,15 @@ def create_bayesian_mcts_policy(
     use_uncertainty: bool = True
 ):
     """
-    Wrap a policy‑value function with Bayesian pruning for use with mctx.
-    (Conceptual implementation; actual usage may require adapting to mctx API.)
+    **Example** of how to wrap a policy‑value function with Bayesian pruning for use with mctx.
+    This function is **not used** in the main pipeline. The actual Bayesian pruning is applied
+    directly inside `pgx_mctx_bridge.py` by calling `JaxBayesianOptimizer.select_candidates`.
+    Kept here as a reference for potential integration.
     """
     import mctx
     
     def bayesian_mcts_policy(params, rng_key, root):
-        # placeholder
-        policy_logits, value, uncertainty = policy_value_fn(root.embedding)
+        policy_logits, value, uncertainty = policy_value_fn(root.embedding)    # placeholder
         
         legal_mask = jnp.ones_like(policy_logits)  
         
