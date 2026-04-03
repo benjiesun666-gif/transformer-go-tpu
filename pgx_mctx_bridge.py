@@ -11,28 +11,24 @@ from typing import Callable, Tuple, Optional
 
 from jax_bayesian import JaxBayesianOptimizer, BayesianConfig
 from config import ModelConfig  # for num_value_buckets
-
+from config import ModelConfig, load_bayesian_config
 
 class PgxMctxMCTS:
-    """MCTS wrapper that integrates a JAX model with mctx.
-    Supports batch search and dynamic Bayesian pruning.
-    """
     def __init__(
             self,
-            apply_fn: Callable,    # Flax model.apply (takes {'params': params}, obs)
+            apply_fn,
             num_simulations: int = 200,
             use_bayesian: bool = True,
-            bayesian_config: Optional[BayesianConfig] = None
+            bayesian_config = None
     ):
         self.apply_fn = apply_fn
         self.num_simulations = num_simulations
         self.use_bayesian = use_bayesian
-
-        # Number of value buckets (128) – used to decode value logits.
         self.num_value_buckets = ModelConfig().num_value_buckets
 
         if self.use_bayesian:
-            config = bayesian_config if bayesian_config else BayesianConfig()
+            # Dynamically load the optimal search parameters.
+            config = bayesian_config if bayesian_config else load_bayesian_config()
             self.bayesian_opt = JaxBayesianOptimizer(config)
 
         self.env = pgx.make("go_19x19")
