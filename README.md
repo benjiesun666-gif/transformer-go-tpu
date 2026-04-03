@@ -12,6 +12,7 @@ The pipeline strictly adheres to the pure functional programming paradigm requir
 * **Compute & Neural Networks:** JAX, Flax, Optax
 * **Environment State Machine:** [Pgx](https://github.com/sotetsuk/pgx) (Go 19x19, fully tensorized)
 * **Tree Search:** [DeepMind MCTX](https://github.com/google-deepmind/mctx) (Batched MCTS in XLA)
+* **Hyperparameter Tuning:** Optuna (Automated TPE search with Median Pruning)
 * **I/O & Logging:** PyTorch `DataLoader` (CPU multi-processing) and `TensorBoard`
 * **Checkpointing:** Google `orbax.checkpoint`
 
@@ -28,6 +29,12 @@ The MCTS implementation explicitly passes the Flax model parameters (`params`) t
 ### 3. Data Pipeline & Value Retro-propagation
 The self-play engine (`tpu_selfplay.py`) evaluates hundreds of parallel environments. Upon terminal states, true game outcomes `[-1, 0, 1]` are retro-propagated through the trajectory and strictly mapped to 128 categorical Value Buckets `[0, 127]` to align with the Cross-Entropy value loss. Data is serialized to compressed `.npz` files.
 PyTorch's `DataLoader` is utilized purely on the CPU side (`data_utils.py`) to handle asynchronous, multi-worker I/O and batch concatenation, before converting batches to `jnp.array` for TPU ingestion.
+
+### 4. Advanced Optimizer Stack & SWA
+To jump out of sharp local minima and improve generalization, the default AdamW optimizer has been replaced with a custom stack: **SGD + Lookahead**. Furthermore, **Stochastic Weight Averaging (SWA)** is manually tracked across epochs using pure `jax.tree_map` operations, maintaining a smoothed parameter state that drastically increases self-play stability.
+
+### 5. Zero-Overhead Playout Cap Randomization
+To encourage diverse exploration during self-play, the MCTS `num_simulations` is randomized per step (e.g., 800-1200). Since dynamically changing this parameter inside `mctx` would trigger catastrophic XLA recompilations on the TPU, the engine pre-compiles a discrete pool of MCTS functions. The Python control loop stochastically routes each step to a specific JIT-compiled function, achieving varying search depths with absolute zero recompilation overhead.
 
 ## 📂 Codebase Structure
 
@@ -46,7 +53,7 @@ PyTorch's `DataLoader` is utilized purely on the CPU side (`data_utils.py`) to h
 
 ### Dependencies
 ```bash
-pip install jax flax optax mctx pgx orbax-checkpoint torch tensorboard
+pip install jax flax optax mctx pgx orbax-checkpoint torch tensorboard optuna
 (Ensure jaxlib is correctly configured for your specific TPU/CUDA environment).
 
 1. Data Generation (Self-Play)
@@ -63,7 +70,13 @@ Bash
 python tpu_train.py --batch-size 512 --epochs 50 --lr 2e-4
 Checkpoints are managed by Orbax in ./tpu_checkpoints/.
 
-3. Metric Monitoring
+3. Hyperparameter Tuning (Optuna)
+Instead of standard training, you can launch an automated hyperparameter search (tuning learning rate, model depth, heads, etc.) using validation loss as the pruning metric:
+
+```bash
+python tpu_train.py --tune --n-trials 20 --batch-size 128 --epochs 5
+
+4. Metric Monitoring
 Launch TensorBoard to monitor Cross-Entropy (Policy/Value) and MSE (Uncertainty) losses:
 
 Bash
