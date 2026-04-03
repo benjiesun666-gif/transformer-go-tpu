@@ -1,7 +1,7 @@
 # Project Design Document: Transformer-based Go AI (TPU Edition)
 
 ## 1. Overview
-This project implements a complete reinforcement learning system for Go, built entirely with JAX/Flax. The core algorithm follows the AlphaZero paradigm: self‑play with Monte Carlo Tree Search (MCTS), and introduces a **Bayesian‑guided sparse MCTS** that dynamically prunes low‑potential actions using the network’s uncertainty output. The entire pipeline is optimized for TPU execution, leveraging `jax.jit`, `jax.vmap`, and the `mctx` library to fuse MCTS and neural inference into an efficient XLA computation graph. A single TPU can perform thousands of concurrent self‑play games.
+This project implements a complete reinforcement learning system for Go, built entirely with JAX/Flax. The core algorithm follows the AlphaZero paradigm: self‑play with Monte Carlo Tree Search (MCTS) and introduces a **Bayesian‑guided sparse MCTS** that dynamically prunes low‑potential actions using the network’s uncertainty output. The entire pipeline is optimized for TPU execution, leveraging `jax.jit`, `jax.vmap`, and the `mctx` library to fuse MCTS and neural inference into an efficient XLA computation graph. A single TPU can perform thousands of concurrent self‑play games.
 
 The code is fully open‑source, aiming to explore Transformer architectures for Go and to provide a reproducible, scalable reinforcement learning baseline for the community.
 
@@ -76,8 +76,8 @@ The function `run_selfplay()` generates a batch of self‑play games:
   - Value cross‑entropy loss (target is the integer bucket index).
   - Optionally, Bayesian uncertainty loss (MSE between `uncertainty` and the normalized prediction error) when `use_bayesian=True`.
 - **Advanced Optimizer Stack**: The traditional AdamW optimizer has been replaced with a combination of **SGD + Lookahead** (`optax.lookahead`). This allows the optimizer to explore the loss landscape more aggressively while maintaining stability.
-- **Stochastic Weight Averaging (SWA)** : An SWA mechanism is implemented manually via `jax.tree_map` across epochs. It maintains a smoothed running average of the model weights (`swa_params`), which provides significantly better generalization and robust performance in self-play compared to the raw training weights.
-- **Automated Hyperparameter Tuning**: The training script integrates **Optuna** for Bayesian hyperparameter search . By passing the `--tune` flag, the system bypasses standard training and uses the Tree-structured Parzen Estimator (TPE) algorithm combined with a `MedianPruner` to dynamically find the optimal learning rate, Transformer depth, and attention heads based on Validation Loss.
+- **Stochastic Weight Averaging (SWA)**: An SWA mechanism is implemented manually via `jax.tree_map` across epochs. It maintains a smoothed running average of the model weights (`swa_params`), which provides significantly better generalization and robust performance in self-play compared to the raw training weights.
+- **Automated Hyperparameter Tuning**: The training script integrates **Optuna** for Bayesian hyperparameter search. By passing the `--tune` flag, the system bypasses standard training and uses the Tree-structured Parzen Estimator (TPE) algorithm combined with a `MedianPruner` to dynamically find the optimal learning rate, Transformer depth, and attention heads based on Validation Loss.
 - Checkpoints are saved using `orbax.checkpoint`, securely storing model parameters and states.
 - Losses are logged to TensorBoard for monitoring.
 
