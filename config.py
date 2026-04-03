@@ -2,6 +2,8 @@
 config.py
 Pure JAX/TPU configuration hub.
 """
+import os
+import json
 from flax import struct
 
 @struct.dataclass
@@ -24,3 +26,20 @@ class BayesianConfig:
     uncertainty_threshold: float = 0.2    # Interpolation range for k.
     exploration_weight: float = 0.3    # How much uncertainty encourages exploration.
     q_value_weight: float = 0.2    # Q‑value bonus (reserved).
+
+
+def load_bayesian_config(filepath: str = "best_mcts_params.json") -> BayesianConfig:
+    # Load hyperparameter configuration from a JSON file if it exists.
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r") as f:
+                params = json.load(f)
+            # Filter loaded dictionary to match dataclass fields.
+            valid_keys = BayesianConfig.__dataclass_fields__.keys()
+            filtered_params = {k: v for k, v in params.items() if k in valid_keys}
+            return BayesianConfig(**filtered_params)
+        except Exception as e:
+            print(f"Warning: Failed to load {filepath}. Using defaults. ({e})")
+
+    # Return default configuration if file is missing or invalid.
+    return BayesianConfig()
