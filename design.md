@@ -59,14 +59,10 @@ This yields a **sparse MCTS** that concentrates search on promising actions, esp
 The function `run_selfplay()` generates a batch of self‑play games:
 1. Initialize model parameters randomly, create a Pgx environment, and instantiate `PgxMctxMCTS`.
 2. Use `jax.vmap` to initialize `BATCH_SIZE` games in parallel.
-3. **Zero-Overhead Playout Cap Randomization**: At each time step, the system randomly selects the MCTS simulation count (e.g., from a discrete pool like `[800, 900, 1000, 1100, 1200]`) to encourage diverse exploration. To prevent catastrophic XLA recompilations caused by dynamic shapes, a dictionary of pre-compiled `jax.jit` functions (`play_steps`) is utilized. The Python control loop routes the state to the corresponding JIT function based on the sampled simulation count.
-   - Call the active MCTS JIT function to obtain action weights (visit distribution, dimension `362`).
-   - Sample an action using `jax.random.categorical`.
-   - Advance the environment with `env.step`.
-4. Record for every step: observation, action weights, current player, and active mask.
-5. After the games finish, back‑propagate the true game outcomes (`state.rewards`) to each move, flipping sign according to the player at that move (so that the value is always from the perspective of the player who made the move).
-6. Map the true outcomes from `[-1,0,1]` to bucket indices `0..127`: `value_bucket = ((value + 1) / 2 * 127).astype(np.int32)`.
-7. Save the data as a compressed `.npz` file with timestamped filename (containing `obs`, `policy` (shape `(T*B, 362)`), `value`, `mask`).
+3. Record for every step: observation, action weights, current player, and active mask.
+4. After the games finish, back‑propagate the true game outcomes (`state.rewards`) to each move, flipping sign according to the player at that move (so that the value is always from the perspective of the player who made the move).
+5. Map the true outcomes from `[-1,0,1]` to bucket indices `0..127`: `value_bucket = ((value + 1) / 2 * 127).astype(np.int32)`.
+6. Save the data as a compressed `.npz` file with timestamped filename (containing `obs`, `policy` (shape `(T*B, 362)`), `value`, `mask`).
 
 ### 3.4 Training Loop (`tpu_train.py`)
 - `TPUSelfPlayDataset` loads `.npz` files into memory (concatenating and filtering by mask). It expects policy arrays of shape `(T*B, 362)`.
