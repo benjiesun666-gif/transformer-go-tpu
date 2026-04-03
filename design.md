@@ -20,8 +20,10 @@ The main components are:
 | MCTS bridge | `pgx_mctx_bridge.py` | Wires the Pgx Go environment with the `mctx` library, providing a pure‑functional MCTS that supports Bayesian pruning and batch inference. |
 | Self‑play | `tpu_selfplay.py` | Uses `jax.vmap` to run many games in parallel, calls MCTS, and saves trajectories as `.npz` files. |
 | Training loop | `tpu_train.py` | Loads self‑play data, executes training steps, saves checkpoints with Orbax, and logs metrics to TensorBoard. |
+| Online RL Tuning | `tune_search.py` | Optuna-driven asymmetric self-play arena for tuning MCTS exploration constants against a baseline. Saves optimal parameters to JSON. |
+| Pipeline Automation| `auto_loop.py` | Automated orchestrator script for continuous self-play, training, and search parameter tuning (AFK mode). |
 | Data loading | `data_utils.py` | PyTorch `DataLoader` with multiprocessing to prefetch data and feed it to TPU efficiently. |
-| Configuration | `config.py` | Hyperparameters (model, Bayesian, training) defined as `flax.struct.dataclass`. |
+| Configuration | `config.py` | Hyperparameters (model, Bayesian, training) defined as `flax.struct.dataclass`. Includes dynamic JSON parsing for MCTS parameters. |
 
 ## 3. Detailed Module Description
 
@@ -81,6 +83,13 @@ The function `run_selfplay()` generates a batch of self‑play games:
 - `TPUSelfPlayDataset` scans all `.npz` files, flattens the time and batch dimensions, and filters out invalid moves using the `mask` array. The data is concatenated into large arrays for efficient access. Policy arrays are reshaped to `(total_samples, 362)`.
 - `create_dataloader` returns a PyTorch `DataLoader` with configurable number of workers, pin memory, and `drop_last` to ensure consistent batch sizes.
 
+### 3.6 Online RL Tuning (`tune_search.py` & `auto_loop.py`)
+To optimize MCTS exploration constants (e.g., `exploration_weight`, `uncertainty_threshold`) without the massive overhead of full neural network retraining, the system employs **Asymmetric Self-Play**:
+1. **Zero-Overhead Branching**: Using `jax.lax.cond`, the TPU dynamically routes tree search calls to either a baseline MCTS tree or a challenger MCTS tree within the exact same compiled computation graph, completely avoiding XLA recompilation.
+2. **Optuna Integration**: Optuna maximizes the challenger's Elo-based win rate across a balanced set of black/white games.
+3. **Dynamic Persistence**: The best configuration is exported to `best_mcts_params.json` and hot-loaded by `config.py` for subsequent generations.
+4. **Auto Loop**: `auto_loop.py` orchestrates `tpu_selfplay.py -> tpu_train.py -> tune_search.py` in an infinite while-loop, creating a fully autonomous RL evolutionary pipeline.
+
 ## 4. Key Algorithmic Details
 ### 4.1 Value Target Discretization
 To use cross‑entropy for value prediction, the true game outcome `v ∈ [-1,1]` is discretized into 128 bins:
@@ -105,8 +114,7 @@ where `v_scalar` is the original value in `[-1,1]`. The loss is MSE, weighted by
 - **Batch processing**: `BATCH_SIZE` (number of concurrent games) can be increased to fully utilize TPU memory and compute.
 - **Memory layout**: Data is stored in flat arrays and directly turned into JAX arrays without extra copies.
 - **Asynchronous data loading**: PyTorch `DataLoader` prefetches batches on CPU while the TPU is busy training.
-- **Zero-Overhead Dynamic Control Flow**: Features like randomized MCTS depths normally trigger expensive XLA recompilations on the TPU due to changing tensor dimensions. This project bypasses this by pre-compiling discrete branches of JIT functions (e.g., for different simulation counts) during initialization, allowing Python to dynamically dispatch calls without incurring any compilation penalty during the self-play loop.
-
+- **Zero-Overhead Asymmetric Search**: Running two differently configured MCTS instances (baseline vs challenger) usually causes severe XLA graph bloat or recompilations. This project bypasses this by utilizing `jax.lax.cond` inside the JIT-compiled play step. This allows the TPU to dynamically dispatch evaluations to the correct MCTS tree based on the current player's turn at runtime, incurring zero compilation penalty during hyperparameter tuning.
 ## 6. Dependencies and Environment
 - **Core**: `jax`, `jaxlib`, `flax`, `optax`, `mctx`, `pgx`, `orbax-checkpoint`
 - **Support**: `torch` (only for data loading), `tensorboard`, `optuna` (for hyperparameter tuning)
