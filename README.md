@@ -33,17 +33,22 @@ PyTorch's `DataLoader` is utilized purely on the CPU side (`data_utils.py`) to h
 ### 4. Advanced Optimizer Stack & SWA
 To jump out of sharp local minima and improve generalization, the default AdamW optimizer has been replaced with a custom stack: **SGD + Lookahead**. Furthermore, **Stochastic Weight Averaging (SWA)** is manually tracked across epochs using pure `jax.tree_map` operations, maintaining a smoothed parameter state that drastically increases self-play stability.
 
+### 5. Online RL Tuning (Asymmetric Self-Play)
+To optimize MCTS exploration constants (`exploration_weight`, `uncertainty_threshold`) without the massive overhead of full neural network retraining, the pipeline includes a zero-overhead asymmetric self-play arena (`tune_search.py`). Using `jax.lax.cond`, the TPU dynamically routes tree search calls to either a baseline MCTS or a challenger MCTS within the same computation graph. Optuna maximizes the challenger's win rate and automatically persists the best configuration to a `JSON` file for seamless integration into subsequent self-play generation.
+
 ## 📂 Codebase Structure
 
 | File | Description |
 | :--- | :--- |
-| `config.py` | `flax.struct.dataclass` defining static hyperparameters for the Transformer and Bayesian optimizer. |
+| `config.py` | `flax.struct.dataclass` defining static hyperparameters and JSON parsing for the Bayesian optimizer. |
 | `tpu_model.py` | Flax module definitions (Conv stem -> Positional Encoding -> Transformer Blocks -> Policy/Value/Uncertainty Heads). |
 | `jax_bayesian.py` | Pure JAX mathematical operations for dynamic thresholding and MCTS action masking. |
 | `pgx_mctx_bridge.py` | The JAX-native bridge linking Pgx environment transitions with the MCTX search loop. |
 | `tpu_selfplay.py` | Batched self-play inference engine. Generates trajectories and handles reward mapping. |
 | `data_utils.py` | CPU-bound PyTorch `Dataset` and `DataLoader` for efficient `.npz` parsing and batching. |
 | `tpu_train.py` | The main Optax training loop with Orbax checkpointing and TensorBoard scalar logging. |
+| `tune_search.py` | Optuna-driven asymmetric self-play arena for tuning MCTS exploration constants against a baseline. |
+| `auto_loop.py` | Automated orchestrator script for continuous self-play, training, and search parameter tuning. |
 | `utils.py` | Stateless helper functions (RNG seeding, win-rate tracking). |
 
 ## 🚀 Usage Instructions
@@ -70,10 +75,19 @@ Checkpoints are managed by Orbax in ./tpu_checkpoints/.
 3. Hyperparameter Tuning (Optuna)
 Instead of standard training, you can launch an automated hyperparameter search (tuning learning rate, model depth, heads, etc.) using validation loss as the pruning metric:
 
-```bash
+Bash
 python tpu_train.py --tune --n-trials 20 --batch-size 128 --epochs 5
+4. MCTS Exploration Parameter Tuning
+Optimize the Bayesian MCTS search constants via asymmetric self-play without modifying neural network weights. Best parameters are automatically saved to best_mcts_params.json:
 
-4. Metric Monitoring
+Bash
+python tune_search.py
+5. Automated Continuous Pipeline (AFK Mode)
+Run the fully automated RL loop. This script sequentially executes data generation, model training, and MCTS parameter tuning in an infinite evolutionary loop:
+
+Bash
+python auto_loop.py
+6. Metric Monitoring
 Launch TensorBoard to monitor Cross-Entropy (Policy/Value) and MSE (Uncertainty) losses:
 
 Bash
