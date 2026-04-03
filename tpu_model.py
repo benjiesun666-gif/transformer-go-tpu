@@ -66,7 +66,7 @@ class TransformerBlock(nn.Module):
         return x
 
 class GoTransformerTPU(nn.Module):
-     """Main Transformer model for Go.
+    """Main Transformer model for Go.
 
     Input: Pgx observation (batch, 19, 19, 17) – 17 feature planes.
     Steps:
