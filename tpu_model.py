@@ -179,6 +179,6 @@ def train_step(state, batch: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray], confi
         return total_loss, metrics
 
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
-    (_, metrics), grads = grad_fn(state.params)
+    (_, metrics), grads = grad_fn(state.params.fast)
     state = state.apply_gradients(grads=grads)
     return state, metrics
