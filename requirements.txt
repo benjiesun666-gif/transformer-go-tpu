@@ -8,3 +8,4 @@ orbax-checkpoint>=0.3.0
 numpy>=1.24.0
 torch>=2.0.0
 tensorboard>=2.13.0
+optuna>=3.0.0
