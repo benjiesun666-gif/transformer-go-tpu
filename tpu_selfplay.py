@@ -70,18 +70,23 @@ def run_selfplay():
     
     params = load_latest_params(init_params)
 
-    # 2. Set up environment and MCTS
+    # 2. Set up environment and MCTS (Playout Cap Randomization)
     env = pgx.make("go_19x19")
-    mcts = PgxMctxMCTS(model.apply, num_simulations=NUM_SIMULATIONS, use_bayesian=USE_BAYESIAN_IN_SELFPLAY)
+    sim_options = [800, 900, 1000, 1100, 1200]
+    play_steps = {}
 
-    @jax.jit
-    def play_step(params, rng_key, state):
-        """One step of parallel self-play for all active games."""
-        rng_mcts, rng_action = jax.random.split(rng_key)
-        action_weights, _ = mcts.search_batch(params, rng_mcts, state)
-        action = jax.random.categorical(rng_action, jnp.log(action_weights + 1e-8))
-        next_state = jax.vmap(env.step)(state, action)
-        return next_state, action_weights, action
+    for sims in sim_options:
+        mcts_instance = PgxMctxMCTS(model.apply, num_simulations=sims, use_bayesian=USE_BAYESIAN_IN_SELFPLAY)
+
+        @jax.jit
+        def step_fn(params, rng_key, st, mcts=mcts_instance):
+            rng_mcts, rng_action = jax.random.split(rng_key)
+            action_weights, _ = mcts.search_batch(params, rng_mcts, st)
+            action = jax.random.categorical(rng_action, jnp.log(action_weights + 1e-8))
+            next_state = jax.vmap(env.step)(st, action)
+            return next_state, action_weights, action
+
+        play_steps[sims] = step_fn
 
     # 3. Initialize batch of games
     rng, env_rng = jax.random.split(rng)
@@ -97,7 +102,10 @@ def run_selfplay():
         active_mask = ~state.terminated
         current_obs = state.observation
 
-        state, action_weights, action = play_step(params, step_rng, state)
+        current_sims = int(np.random.choice(sim_options))
+        active_play_step = play_steps[current_sims]
+
+        state, action_weights, action = active_play_step(params, step_rng, state)
 
         # Store data for this time step (only for debugging; later we compress)
         trajectories["obs"].append(current_obs)
