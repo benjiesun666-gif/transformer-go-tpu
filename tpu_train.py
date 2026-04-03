@@ -38,7 +38,8 @@ def create_train_state(rng, config: ModelConfig, learning_rate: float):
     params = model.init(rng, dummy_obs)['params']
     base_opt = optax.sgd(learning_rate=learning_rate, momentum=0.9)
     tx = optax.lookahead(base_opt, sync_period=5, slow_step_size=0.5)
-    return train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
+    lookahead_params = optax.LookaheadParams.init_synced(params)
+    return train_state.TrainState.create(apply_fn=model.apply, params=lookahead_params, tx=tx)
 
 
 @functools.partial(jax.jit, static_argnums=(2,))
@@ -49,11 +50,11 @@ def eval_step(state, batch_jax, config: ModelConfig):
     """
     if config.use_bayesian:
         policy_logits, value_logits, uncertainty = state.apply_fn(
-            {'params': state.params}, batch_jax[0], deterministic=True
+            {'params': state.params.fast}, batch_jax[0], deterministic=True
         )
     else:
         policy_logits, value_logits = state.apply_fn(
-            {'params': state.params}, batch_jax[0], deterministic=True
+            {'params': state.params.fast}, batch_jax[0], deterministic=True
         )
         uncertainty = None
 
@@ -104,7 +105,7 @@ def train_and_evaluate(
     global_step = 0
     best_val_loss = float('inf')
 
-    swa_params = jax.tree.map(lambda x: jnp.copy(x), state.params)
+    swa_params = jax.tree.map(lambda x: jnp.copy(x), state.params.fast)
 
     for epoch in range(epochs):
         # --- Training Phase ---
@@ -155,7 +156,7 @@ def train_and_evaluate(
 
         print(f"  Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Time: {time.time()-start_time:.1f}s")
 
-        swa_params = update_swa(swa_params, state.params, epoch)
+        swa_params = update_swa(swa_params, state.params.fast, epoch)
 
         # Save checkpoint if it's the best model so far
         if checkpoint_manager and avg_val_loss < best_val_loss:
