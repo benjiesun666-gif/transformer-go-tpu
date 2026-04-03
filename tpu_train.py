@@ -27,8 +27,8 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 @jax.jit
 def update_swa(swa_p, current_p, ep):
-    """JIT 编译的 SWA 权重滑动平均"""
-    return jax.tree_map(lambda s, p: (s * ep + p) / (ep + 1), swa_p, current_p)
+    """JIT-compiled SWA weight moving average"""
+    return jax.tree.map(lambda s, p: (s * ep + p) / (ep + 1), swa_p, current_p)
 
 
 def create_train_state(rng, config: ModelConfig, learning_rate: float):
@@ -104,7 +104,7 @@ def train_and_evaluate(
     global_step = 0
     best_val_loss = float('inf')
 
-    swa_params = jax.tree_map(lambda x: jnp.copy(x), state.params)
+    swa_params = jax.tree.map(lambda x: jnp.copy(x), state.params)
 
     for epoch in range(epochs):
         # --- Training Phase ---
