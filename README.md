@@ -50,7 +50,7 @@ To jump out of sharp local minima and improve generalization, the default AdamW 
 
 ### Dependencies
 ```bash
-pip install jax flax optax mctx pgx orbax-checkpoint torch tensorboard optuna
+pip install -r requirements.txt
 (Ensure jaxlib is correctly configured for your specific TPU/CUDA environment).
 
 1. Data Generation (Self-Play)
