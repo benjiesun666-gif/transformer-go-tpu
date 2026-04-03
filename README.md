@@ -33,9 +33,6 @@ PyTorch's `DataLoader` is utilized purely on the CPU side (`data_utils.py`) to h
 ### 4. Advanced Optimizer Stack & SWA
 To jump out of sharp local minima and improve generalization, the default AdamW optimizer has been replaced with a custom stack: **SGD + Lookahead**. Furthermore, **Stochastic Weight Averaging (SWA)** is manually tracked across epochs using pure `jax.tree_map` operations, maintaining a smoothed parameter state that drastically increases self-play stability.
 
-### 5. Zero-Overhead Playout Cap Randomization
-To encourage diverse exploration during self-play, the MCTS `num_simulations` is randomized per step (e.g., 800-1200). Since dynamically changing this parameter inside `mctx` would trigger catastrophic XLA recompilations on the TPU, the engine pre-compiles a discrete pool of MCTS functions. The Python control loop stochastically routes each step to a specific JIT-compiled function, achieving varying search depths with absolute zero recompilation overhead.
-
 ## 📂 Codebase Structure
 
 | File | Description |
