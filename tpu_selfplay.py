@@ -96,7 +96,7 @@ def run_selfplay():
     rng, env_rng = jax.random.split(rng)
     state = jax.vmap(env.init)(jax.random.split(env_rng, BATCH_SIZE))
     num_devices = jax.device_count()
-    state = jax.tree_map(
+    state = jax.tree.map(
         lambda x: x.reshape((num_devices, BATCH_SIZE // num_devices) + x.shape[1:]),
         state
     )
