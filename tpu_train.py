@@ -8,6 +8,7 @@ import os
 import time
 import argparse
 import functools
+import json
 
 import jax
 import jax.numpy as jnp
@@ -134,7 +135,11 @@ def train_and_evaluate(
     latest_step = checkpoint_manager.latest_step() if checkpoint_manager else None
     global_step = latest_step if latest_step is not None else 0
 
-    print(f"📈 Resuming training from global step: {global_step} [{model_type.upper()}]")
+    if latest_step is not None:
+        state = checkpoint_manager.restore(latest_step, args=ocp.args.StandardRestore(state))
+        print(f"✅ Successfully restored weights from step {latest_step} [{model_type.upper()}]")
+    else:
+        print(f"📈 Starting training from scratch [{model_type.upper()}]")
 
     start_time = time.time()
     best_val_loss = float('inf')
@@ -292,6 +297,11 @@ def main():
         print("\n🏆 Tuning Complete!")
         print(f"Best Trial: {study.best_trial.number}")
         print("Best Hyperparameters:")
+        # Save the best hyperparameters to a JSON file for the auto_loop to read
+        best_params = study.best_trial.params
+        with open("best_train_params.json", "w") as f:
+            json.dump(best_params, f, indent=4)
+        print("✅ Best training parameters saved to best_train_params.json")
         for key, value in study.best_trial.params.items():
             print(f"    {key}: {value}")
     else:
