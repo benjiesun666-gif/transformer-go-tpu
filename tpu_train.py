@@ -31,15 +31,31 @@ def update_swa(swa_p, current_p, ep):
     return jax.tree.map(lambda s, p: (s * ep + p) / (ep + 1), swa_p, current_p)
 
 
-def create_train_state(rng, config: ModelConfig, learning_rate: float):
-    """Initialize a Flax TrainState with the model and SGD+Lookahead optimizer."""
-    model = GoTransformerTPU(config)
+def create_train_state(rng, config: ModelConfig, learning_rate: float, model_type: str = "transformer"):
+    """
+    Initializes the model architecture using the centralized
+    configuration to ensure depth consistency across the pipeline.
+    """
+    if model_type == "cnn":
+        from tpu_model import GoCNNTPU
+        # Use the dynamic property to match the self-play and search modules
+        model = GoCNNTPU(config, num_blocks=config.cnn_blocks)
+    else:
+        from tpu_model import GoTransformerTPU
+        model = GoTransformerTPU(config)
+
     dummy_obs = jnp.zeros((1, 19, 19, 17), dtype=jnp.float32)
     params = model.init(rng, dummy_obs)['params']
+
     base_opt = optax.sgd(learning_rate=learning_rate, momentum=0.9)
     tx = optax.lookahead(base_opt, sync_period=5, slow_step_size=0.5)
     lookahead_params = optax.LookaheadParams.init_synced(params)
-    return train_state.TrainState.create(apply_fn=model.apply, params=lookahead_params, tx=tx)
+
+    return train_state.TrainState.create(
+        apply_fn=model.apply,
+        params=lookahead_params,
+        tx=tx
+    )
 
 
 @functools.partial(jax.jit, static_argnums=(2,))
@@ -76,35 +92,54 @@ def eval_step(state, batch_jax, config: ModelConfig):
 
 
 def train_and_evaluate(
-    config: ModelConfig,
-    lr: float,
-    train_loader,
-    val_loader,
-    epochs: int,
-    checkpoint_dir: str = None,
-    log_dir: str = None,
-    trial: optuna.Trial = None
+        config: ModelConfig,
+        lr: float,
+        train_loader,
+        val_loader,
+        epochs: int,
+        checkpoint_dir: str = None,
+        log_dir: str = None,
+        model_type: str = "transformer",
+        trial: optuna.Trial = None
 ):
     """
-    Core training and evaluation loop.
-    Can be run standardly or managed dynamically by an Optuna trial.
+    Executes the training and validation loops while ensuring global step
+    persistence and architecture-specific logging.
     """
     rng = jax.random.PRNGKey(42)
-    state = create_train_state(rng, config, lr)
+
+    # 1. Initialize the specific architecture (Transformer or CNN)
+    state = create_train_state(rng, config, lr, model_type=model_type)
+
+    # JIT compile the core training step for TPU performance
     jitted_train_step = jax.jit(train_step, static_argnums=(2,))
 
+    # 2. Setup TensorBoard SummaryWriter for metric visualization
     writer = SummaryWriter(log_dir=log_dir) if log_dir else None
 
+    # 3. Initialize the Orbax CheckpointManager
     checkpoint_manager = None
     if checkpoint_dir:
         os.makedirs(checkpoint_dir, exist_ok=True)
+        # Keep the 5 most recent checkpoints to save disk space
         options = ocp.CheckpointManagerOptions(max_to_keep=5, create=True)
-        checkpoint_manager = ocp.CheckpointManager(os.path.abspath(checkpoint_dir), options=options)
+        checkpoint_manager = ocp.CheckpointManager(
+            os.path.abspath(checkpoint_dir),
+            ocp.StandardCheckpointer(),
+            options=options
+        )
+
+    # ✅ STEP 4: Inherit global_step from the latest checkpoint
+    # This ensures that logging continues linearly even after a script restart.
+    latest_step = checkpoint_manager.latest_step() if checkpoint_manager else None
+    global_step = latest_step if latest_step is not None else 0
+
+    print(f"📈 Resuming training from global step: {global_step} [{model_type.upper()}]")
 
     start_time = time.time()
-    global_step = 0
     best_val_loss = float('inf')
 
+    # Initialize Stochastic Weight Averaging (SWA) parameters
     swa_params = jax.tree.map(lambda x: jnp.copy(x), state.params.fast)
 
     for epoch in range(epochs):
@@ -114,16 +149,21 @@ def train_and_evaluate(
             obs_pt, policy_pt, value_pt = batch_pt
             value_int = value_pt.long()
 
+            # Transfer PyTorch tensors to JAX/TPU device memory
             batch_jax = (
                 jnp.array(obs_pt.numpy()),
                 jnp.array(policy_pt.numpy()),
                 jnp.array(value_int.numpy(), dtype=jnp.int32)
             )
 
+            # Perform gradient update and calculate metrics
             state, metrics = jitted_train_step(state, batch_jax, config)
             epoch_loss += metrics['total_loss'].item()
+
+            # Increment the persistent global step
             global_step += 1
 
+            # Log metrics to TensorBoard using the accumulated global_step
             if writer:
                 writer.add_scalar('Loss/Train_Total', metrics['total_loss'].item(), global_step)
                 writer.add_scalar('Loss/Train_Policy', metrics['policy_loss'].item(), global_step)
@@ -143,7 +183,7 @@ def train_and_evaluate(
                     jnp.array(policy_pt.numpy()),
                     jnp.array(value_pt.long().numpy(), dtype=jnp.int32)
                 )
-
+                # Compute validation loss (no gradient backprop)
                 v_loss = eval_step(state, batch_jax, config)
                 val_loss += v_loss.item()
 
@@ -151,25 +191,30 @@ def train_and_evaluate(
         else:
             avg_val_loss = avg_train_loss
 
+        # Log validation metrics to TensorBoard
         if writer:
             writer.add_scalar('Loss/Validation_Total', avg_val_loss, global_step)
 
-        print(f"  Epoch {epoch+1}/{epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Time: {time.time()-start_time:.1f}s")
+        print(
+            f"  Epoch {epoch + 1}/{epochs} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Time: {time.time() - start_time:.1f}s")
 
+        # Update Stochastic Weight Averaging for better generalization
         swa_params = update_swa(swa_params, state.params.fast, epoch)
 
-        # Save checkpoint if it's the best model so far
+        # Save checkpoint if the model achieves a new best validation loss
         if checkpoint_manager and avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
+            # Save the training state to the dynamic checkpoint directory
             checkpoint_manager.save(global_step, args=ocp.args.StandardSave(state))
             checkpoint_manager.wait_until_finished()
 
-        # Optuna Pruning step (Early Stopping for bad trials)
+        # Optuna Pruning logic to terminate unpromising hyperparameter trials early
         if trial:
             trial.report(avg_val_loss, epoch)
             if trial.should_prune():
                 raise optuna.exceptions.TrialPruned()
 
+    # Clean up resources
     if writer:
         writer.close()
 
@@ -180,16 +225,9 @@ def objective(trial, train_loader, val_loader, args):
     """Optuna objective function for hyperparameter tuning."""
     # 1. Suggest hyperparameters
     lr = trial.suggest_float('lr', 1e-5, 1e-3, log=True)
-    d_model = trial.suggest_categorical('d_model', [128, 256, 512])
-    nhead = trial.suggest_categorical('nhead', [4, 8])
-    num_layers = trial.suggest_int('num_layers', 4, 12, step=2)
 
     use_bayesian = not args.disable_bayesian
     config = ModelConfig(
-        d_model=d_model,
-        nhead=nhead,
-        num_layers=num_layers,
-        dim_feedforward=d_model * 4,
         use_bayesian=use_bayesian
     )
 
@@ -197,7 +235,7 @@ def objective(trial, train_loader, val_loader, args):
     tune_epochs = min(args.epochs, 10)
 
     print(f"\n--- Starting Trial {trial.number} ---")
-    print(f"Params: lr={lr:.1e}, d_model={d_model}, layers={num_layers}, nhead={nhead}")
+    print(f"Params: lr={lr:.1e}")
 
     # 2. Run training
     val_loss = train_and_evaluate(
@@ -257,23 +295,23 @@ def main():
         for key, value in study.best_trial.params.items():
             print(f"    {key}: {value}")
     else:
-        print("🎯 STANDARD TRAINING MODE")
+        current_log_dir = os.path.join(args.log_dir, ModelConfig().model_type)
+        print(f"🎯 STANDARD TRAINING MODE [{ModelConfig().model_type.upper()}]")
         use_bayesian = not args.disable_bayesian
-        config = ModelConfig(
-            d_model=256, nhead=8, num_layers=8, use_bayesian=use_bayesian
-        )
+        config = ModelConfig(use_bayesian=use_bayesian)
         if use_bayesian:
             print("💡 Bayesian uncertainty head enabled")
 
-        print(f"📊 TensorBoard logs will be saved to: {args.log_dir}")
+        print(f"📊 TensorBoard logs will be saved to: {current_log_dir}")
         train_and_evaluate(
             config=config,
             lr=args.lr,
             train_loader=train_loader,
             val_loader=val_loader,
             epochs=args.epochs,
-            checkpoint_dir=args.checkpoint_dir,
-            log_dir=args.log_dir
+            checkpoint_dir=config.checkpoint_dir,
+            log_dir=current_log_dir,
+            model_type=config.model_type
         )
         print("🎉 Training finished.")
 
