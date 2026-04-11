@@ -16,8 +16,8 @@ from pgx_mctx_bridge import PgxMctxMCTS
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 BATCH_SIZE = 128
-NUM_SIMULATIONS = 20
-MAX_MOVES = 40
+NUM_SIMULATIONS = 400
+MAX_MOVES = 400
 PARAMS_FILE = "best_mcts_params.json"
 
 
