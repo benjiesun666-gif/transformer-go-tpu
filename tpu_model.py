@@ -132,6 +132,84 @@ class GoTransformerTPU(nn.Module):
 
         return policy_logits, value_logits
 
+
+class ResNetBlock(nn.Module):
+    """
+    A standard Residual Block designed for deep convolutional architectures.
+    It utilizes skip connections to mitigate the vanishing gradient problem,
+    allowing for much deeper networks in game AI agents.
+    """
+    filters: int
+
+    @nn.compact
+    def __call__(self, x, deterministic: bool = True):
+        # Store the input for the identity shortcut (residual connection)
+        residual = x
+
+        # First convolutional layer with 3x3 kernel, Batch Normalization, and GeLU activation
+        x = nn.Conv(features=self.filters, kernel_size=(3, 3), padding='SAME')(x)
+        x = nn.BatchNorm(use_running_average=not deterministic)(x)
+        x = nn.gelu(x)
+
+        # Second convolutional layer to complete the residual path
+        x = nn.Conv(features=self.filters, kernel_size=(3, 3), padding='SAME')(x)
+        x = nn.BatchNorm(use_running_average=not deterministic)(x)
+
+        # Add the original input back to the processed features and apply final activation
+        return nn.gelu(x + residual)
+
+
+class GoCNNTPU(nn.Module):
+    """
+    An AlphaZero-style Convolutional Neural Network (CNN) tailored for Go.
+    This architecture extracts spatial features through a deep residual tower
+    and produces policy, value, and Bayesian uncertainty outputs.
+    """
+    config: ModelConfig
+    num_blocks: int = 40  # Depth is scaled to approximately 80M parameters
+
+    @nn.compact
+    def __call__(self, board: jnp.ndarray, deterministic: bool = True):
+        batch_size = board.shape[0]
+        x = board.astype(jnp.float32)
+
+        # Initial Convolutional Stem: maps input planes to the internal model dimension
+        x = nn.Conv(features=self.config.d_model, kernel_size=(3, 3), padding='SAME')(x)
+        x = nn.BatchNorm(use_running_average=not deterministic)(x)
+        x = nn.gelu(x)
+
+        # Residual Tower: stack of blocks to extract complex board patterns and dependencies
+        for _ in range(self.num_blocks):
+            x = ResNetBlock(filters=self.config.d_model)(x, deterministic=deterministic)
+
+        # Global Average Pooling: reduces 19x19 spatial features to a single feature vector
+        x_pooled = jnp.mean(x, axis=(1, 2))
+
+        # Policy Head: maps extracted features to a probability distribution over 362 legal moves
+        policy_logits = nn.Sequential([
+            nn.Dense(self.config.d_model),
+            nn.gelu,
+            nn.Dense(self.config.num_policy_outputs)
+        ])(x_pooled)
+
+        # Value Head: outputs a categorical distribution representing the expected game outcome
+        value_logits = nn.Sequential([
+            nn.Dense(self.config.d_model),
+            nn.gelu,
+            nn.Dense(self.config.num_value_buckets)
+        ])(x_pooled)
+
+        # Optional Bayesian Head: estimates the model's epistemic uncertainty for MCTS pruning
+        if self.config.use_bayesian:
+            uncertainty = nn.Sequential([
+                nn.Dense(self.config.d_model // 2),
+                nn.gelu,
+                nn.Dense(1),
+                nn.sigmoid
+            ])(x_pooled)
+            return policy_logits, value_logits, uncertainty
+
+        return policy_logits, value_logits
 def train_step(state, batch: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray], config: ModelConfig):
     """Single training step, JIT‑compiled.
 
