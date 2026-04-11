@@ -13,6 +13,7 @@ class ModelConfig:
     Unified configuration for Go models with synchronized architecture depth.
     """
     model_type: str = "transformer"
+    data_dir: str = "./tpu_data"
 
     @property
     def checkpoint_dir(self) -> str:
