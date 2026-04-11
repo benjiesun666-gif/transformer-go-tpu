@@ -19,56 +19,63 @@ from pgx_mctx_bridge import PgxMctxMCTS
 # ----------------------------------------------------------------------
 # Configuration – adjust based on hardware and desired data volume
 # ----------------------------------------------------------------------
-BATCH_SIZE = 64        # Number of concurrent games. Increase to utilize TPU memory
+BATCH_SIZE = 256        # Number of concurrent games. Increase to utilize TPU memory
 NUM_SIMULATIONS = 800    # MCTS simulations per move. Higher -> stronger but slower.
-MAX_MOVES = 300         # Maximum moves per game (for 19x19, ~300 is typical).
-CHECKPOINT_DIR = "./tpu_checkpoints"
+MAX_MOVES = 400         # Maximum moves per game (for 19x19, ~300 is typical).
 
 # Bayesian pruning switch – enable only after model is strong enough.
-USE_BAYESIAN_IN_SELFPLAY = False 
+USE_BAYESIAN_IN_SELFPLAY = False
 
 
-def load_latest_params(init_params):
-    """Load the most recent model checkpoint from CHECKPOINT_DIR.
-    If no valid checkpoint exists, return the initial random parameters.
+def load_latest_params(init_params, config: ModelConfig):
     """
-    if not os.path.exists(CHECKPOINT_DIR):
+    Loads the latest weights for self-play from the correct directory.
+    """
+    path = config.checkpoint_dir
+
+    if not os.path.exists(path):
+        print(f"⚠️ Path {path} not found. Starting with initial params.")
         return init_params
 
     options = ocp.CheckpointManagerOptions(step_prefix='', cleanup_tmp_directories=True)
     mngr = ocp.CheckpointManager(
-        os.path.abspath(CHECKPOINT_DIR),
+        os.path.abspath(path),
         ocp.StandardCheckpointer(),
         options=options
     )
 
     latest_step = mngr.latest_step()
     if latest_step is None:
-        print("⚠️ No valid checkpoint found. Using random initial parameters.")
         return init_params
 
-    print(f"📦 Found checkpoint at step {latest_step}. Loading...")
+    print(f"📦 Loading {config.model_type} weights for self-play from {path}...")
     restored = mngr.restore(latest_step)
 
-    # Restored may be a dict with 'params' or the params directly.
-    if 'params' in restored:
+    if isinstance(restored, dict) and 'params' in restored:
         return restored['params']
     return restored
 
 def run_selfplay():
     print(f"🚀 Initializing TPU self-play engine (Bayesian: {USE_BAYESIAN_IN_SELFPLAY})")
     rng = jax.random.PRNGKey(int(time.time()))
-
-    # 1. Initialize model and parameters
+    # 1. Initialize the selected model architecture and parameters
     config = ModelConfig()
-    model = GoTransformerTPU(config)
+
+    # Conditional instantiation based on the global config type
+    if config.model_type == "cnn":
+        from tpu_model import GoCNNTPU
+        # Use the centralized cnn_blocks property to ensure consistency
+        model = GoCNNTPU(config, num_blocks=config.cnn_blocks)
+    else:
+        from tpu_model import GoTransformerTPU
+        model = GoTransformerTPU(config)
     rng, init_rng = jax.random.split(rng)
     dummy_obs = jnp.zeros((1, 19, 19, 17), dtype=jnp.float32)
 
     
     init_params = model.init(init_rng, dummy_obs)['params']
     
-    params = load_latest_params(init_params)
+    params = load_latest_params(init_params, config)
 
     # 2. Set up environment and MCTS
     env = pgx.make("go_19x19")
