@@ -6,6 +6,7 @@ and saves trajectories as .npz files for training.
 """
 import os
 import time
+import functools
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -81,9 +82,10 @@ def run_selfplay():
     env = pgx.make("go_19x19")
     mcts = PgxMctxMCTS(model.apply, num_simulations=NUM_SIMULATIONS, use_bayesian=USE_BAYESIAN_IN_SELFPLAY)
 
-    @jax.jit
+    @functools.partial(jax.pmap, in_axes=(None, 0, 0))
     def play_step(params, rng_key, state):
-        """One step of parallel self-play for all active games."""
+        """Maps the computation across available devices.
+        Parameters are shared; random keys and environment states are sharded along the batch dimension."""
         rng_mcts, rng_action = jax.random.split(rng_key)
         action_weights, _ = mcts.search_batch(params, rng_mcts, state)
         action = jax.random.categorical(rng_action, jnp.log(action_weights + 1e-8))
@@ -93,6 +95,11 @@ def run_selfplay():
     # 3. Initialize batch of games
     rng, env_rng = jax.random.split(rng)
     state = jax.vmap(env.init)(jax.random.split(env_rng, BATCH_SIZE))
+    num_devices = jax.device_count()
+    state = jax.tree_map(
+        lambda x: x.reshape((num_devices, BATCH_SIZE // num_devices) + x.shape[1:]),
+        state
+    )
     # 4. Run the games
     trajectories = {"obs": [], "policy": [], "player": [], "mask": []}
 
@@ -101,10 +108,12 @@ def run_selfplay():
 
     for step in range(MAX_MOVES):
         rng, step_rng = jax.random.split(rng)
+        step_rngs = jax.random.split(step_rng, num_devices)
+
         active_mask = ~state.terminated
         current_obs = state.observation
 
-        state, action_weights, action = play_step(params, step_rng, state)
+        state, action_weights, action = play_step(params, step_rngs, state)
 
         # Store data for this time step (only for debugging; later we compress)
         trajectories["obs"].append(current_obs)
@@ -118,11 +127,11 @@ def run_selfplay():
 
     # 5. Back‑propagate true game outcomes to each move (AlphaZero style)
     print(f"📦 Processing data and saving...")
-    final_rewards = np.array(state.rewards)    # shape (BATCH_SIZE,)
-    all_obs = np.array(jnp.stack(trajectories["obs"]))    # (T, B, 19, 19, 17)
-    all_policy = np.array(jnp.stack(trajectories["policy"]))    # (T, B, 362)
-    all_players = np.array(jnp.stack(trajectories["player"]))    # (T, B)
-    all_masks = np.array(jnp.stack(trajectories["mask"]))    # (T, B)
+    final_rewards = np.array(state.rewards).reshape((BATCH_SIZE, 2))    # shape (BATCH_SIZE,)
+    all_obs = np.array(jnp.stack(trajectories["obs"])).reshape((-1, BATCH_SIZE, 19, 19, 17))
+    all_policy = np.array(jnp.stack(trajectories["policy"])).reshape((-1, BATCH_SIZE, 362))
+    all_players = np.array(jnp.stack(trajectories["player"])).reshape((-1, BATCH_SIZE))
+    all_masks = np.array(jnp.stack(trajectories["mask"])).reshape((-1, BATCH_SIZE))
 
     seq_len = all_obs.shape[0]
     true_values = np.zeros((seq_len, BATCH_SIZE), dtype=np.float32)
