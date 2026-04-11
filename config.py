@@ -6,17 +6,37 @@ import os
 import json
 from flax import struct
 
+
 @struct.dataclass
 class ModelConfig:
-    """TPU Transformer 模型配置"""
-    d_model: int = 256          # Hidden size. Increase for stronger models.
-    nhead: int = 8              # Attention heads. Should divide d_model.
-    num_layers: int = 8         # Number of Transformer layers.
-    dim_feedforward: int = 1024 # FFN inner dimension (typically 4*d_model).
-    dropout: float = 0.0        # Dropout rate. Usually 0 for self-play.
-    num_policy_outputs: int = 362 # 361 board positions + pass.
-    num_value_buckets: int = 128 # Discretized value targets.
-    use_bayesian: bool = True   # Enable uncertainty head and pruning.
+    """
+    Unified configuration for Go models with synchronized architecture depth.
+    """
+    model_type: str = "transformer"
+
+    @property
+    def checkpoint_dir(self) -> str:
+        """
+        Generates a unique directory path for checkpoints based on the model type.
+        """
+        return f"./checkpoints_{self.model_type}"
+
+    @property
+    def cnn_blocks(self) -> int:
+        """
+        Calculates the number of residual blocks required to match
+        the target 80M parameter capacity.
+        """
+        return 40
+
+    d_model: int = 768
+    nhead: int = 12
+    num_layers: int = 12
+    dim_feedforward: int = 3072
+    dropout: float = 0.0
+    num_policy_outputs: int = 362
+    num_value_buckets: int = 128
+    use_bayesian: bool = True
 
 @struct.dataclass
 class BayesianConfig:
