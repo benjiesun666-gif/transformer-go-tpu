@@ -83,7 +83,7 @@ def main():
             # Dynamic epochs: Train more passes when data is scarce, fewer when data is abundant.
             dynamic_epochs = 3 if len(data_files) < 20 else 1
             print(f"🎯 Applying Optimized Learning Rate: {current_lr} | Epochs: {dynamic_epochs}")
-            run_command(f"python3 -u tpu_train.py --batch-size 1024 --epochs {dynamic_epochs} --lr {current_lr}")
+            run_command(f"python3 -u tpu_train.py --batch-size 256 --epochs {dynamic_epochs} --lr {current_lr}")
 
         # 5. Tune MCTS search parameters.
         if iteration % 5 == 0 and len(data_files) >= 5:
