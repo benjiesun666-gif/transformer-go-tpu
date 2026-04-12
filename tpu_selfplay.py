@@ -21,7 +21,7 @@ from pgx_mctx_bridge import PgxMctxMCTS
 # Configuration – adjust based on hardware and desired data volume
 # ----------------------------------------------------------------------
 BATCH_SIZE = 256        # Number of concurrent games. Increase to utilize TPU memory
-NUM_SIMULATIONS = 400    # MCTS simulations per move. Higher -> stronger but slower.
+NUM_SIMULATIONS = 50    # MCTS simulations per move. Higher -> stronger but slower.
 MAX_MOVES = 400         # Maximum moves per game (for 19x19, ~300 is typical).
 
 # Bayesian pruning switch – enable only after model is strong enough.
