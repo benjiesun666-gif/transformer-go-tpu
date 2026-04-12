@@ -210,32 +210,28 @@ class GoCNNTPU(nn.Module):
             return policy_logits, value_logits, uncertainty
 
         return policy_logits, value_logits
+
+
 def train_step(state, batch: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray], config: ModelConfig):
-    """Single training step, JIT‑compiled.
-
-    Args:
-        state: Flax training state (model params, optimizer).
-        batch: (obs, policy_target, value_target)
-        config: model config (used to determine Bayesian head).
-
-    Returns:
-        new_state, metrics (policy_loss, value_loss, uncertainty_loss, total_loss)
+    """
+    Performs a single distributed training step.
+    Gradients and metrics are averaged across all TPU cores using pmean.
     """
     obs, policy_target, value_target = batch
 
     def loss_fn(params):
-        # Forward pass with dropout (deterministic=False)
+        # Forward pass with dropout enabled
         if config.use_bayesian:
             policy_logits, value_logits, uncertainty = state.apply_fn({'params': params}, obs, deterministic=False)
         else:
             policy_logits, value_logits = state.apply_fn({'params': params}, obs, deterministic=False)
             uncertainty = None
-            
-        # Policy cross‑entropy
+
+        # Policy loss: Cross-entropy between MCTS distribution and model logits
         policy_log_probs = jax.nn.log_softmax(policy_logits)
         policy_loss = -jnp.sum(policy_target * policy_log_probs, axis=-1).mean()
 
-        # Value cross‑entropy (target is bucket index 0..127)
+        # Value loss: Softmax cross-entropy for discretized value buckets
         value_loss = optax.softmax_cross_entropy_with_integer_labels(
             logits=value_logits, labels=value_target
         ).mean()
@@ -244,10 +240,9 @@ def train_step(state, batch: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray], confi
         metrics = {'policy_loss': policy_loss, 'value_loss': value_loss}
 
         if config.use_bayesian:
-            # Convert bucket index back to scalar in [-1,1] for uncertainty loss
+            # Map discrete bucket index to [0, 1] for uncertainty target calculation
             value_scalar_target = value_target.astype(jnp.float32) / (config.num_value_buckets - 1)
-            uncertainty_target = jnp.abs(value_scalar_target - 0.5) * 2.0
-            uncertainty_target = jnp.expand_dims(uncertainty_target, -1)
+            uncertainty_target = jnp.expand_dims(jnp.abs(value_scalar_target - 0.5) * 2.0, -1)
             uncertainty_loss = jnp.mean(jnp.square(uncertainty - uncertainty_target))
 
             total_loss += 0.01 * uncertainty_loss
@@ -256,7 +251,14 @@ def train_step(state, batch: Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray], confi
         metrics['total_loss'] = total_loss
         return total_loss, metrics
 
+    # Compute local gradients
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
     (_, metrics), grads = grad_fn(state.params.fast)
-    state = state.apply_gradients(grads=grads)
-    return state, metrics
+
+    # Distributed Sync: Average gradients and metrics across all 8 cores
+    grads = jax.lax.pmean(grads, axis_name="batch")
+    metrics = jax.lax.pmean(metrics, axis_name="batch")
+
+    # Apply synchronized gradients to the global state
+    new_state = state.apply_gradients(grads=grads)
+    return new_state, metrics
