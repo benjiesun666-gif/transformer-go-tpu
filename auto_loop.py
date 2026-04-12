@@ -71,7 +71,7 @@ def main():
         # Run Bayesian optimization for the learning rate every 5 iterations.
         if iteration % 5 == 0 and len(data_files) >= 5:
             print("🔍 Running Bayesian Optimization to find the optimal LR for current data distribution...")
-            run_command("python3 -u tpu_train.py --tune --n-trials 10 --batch-size 1024")
+            run_command("python3 -u tpu_train.py --tune --n-trials 10 --batch-size 256")
 
         # 4. Train the model using the LATEST optimized LR from Bayesian trials.
         # Implemented a warm-up phase to prevent overfitting to initial random play data.
