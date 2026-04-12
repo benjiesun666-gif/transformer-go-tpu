@@ -126,7 +126,7 @@ class PgxMctxMCTS:
             return recurrent_output, next_state
 
         def search(params, rng_key, state: pgx.State):
-            """Root node search: evaluate root, then call mctx.muzero_policy."""
+            """Root node search: evaluate root, then call mctx.gumbel_muzero_policy."""
             out = self.apply_fn({'params': params}, state.observation)
 
             if isinstance(out, (list, tuple)) and len(out) == 3:
@@ -142,23 +142,24 @@ class PgxMctxMCTS:
                 prior_logits,
                 jnp.finfo(prior_logits.dtype).min
             )
+
             if self.use_bayesian:
                 prior_logits = self._apply_bayesian_mask(prior_logits, uncertainty, state.legal_action_mask)
 
             root = mctx.RootFnOutput(
                 prior_logits=prior_logits,
-                value=value_scalar, 
+                value=value_scalar,
                 embedding=state
             )
 
-            policy_output = mctx.muzero_policy(
+            policy_output = mctx.gumbel_muzero_policy(
                 params=params,
                 rng_key=rng_key,
                 root=root,
                 recurrent_fn=recurrent_fn,
                 num_simulations=self.num_simulations,
-                dirichlet_fraction=0.25,
-                dirichlet_alpha=0.3,
+                max_num_considered_actions=256,
+                gumbel_scale=1.0
             )
 
             return policy_output.action_weights, value_scalar
